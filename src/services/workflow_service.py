@@ -2,6 +2,7 @@
 Service to execute the complete workflow: functional requirements -> TRD -> time/cost estimates
 """
 import os
+import json
 import asyncio
 import httpx
 from typing import Dict, Any, Optional
@@ -15,7 +16,9 @@ class WorkflowService:
     def __init__(self):
         self.azure_openai_service = AzureOpenAIService()
         self.claude_service = ClaudeService()
-        self.backend_endpoint = os.getenv("BACKEND_ENDPOINT_URL", "")
+        backend_base_url = os.getenv("BACKEND_ENDPOINT_URL", "")
+        # Append /api/v1/projects endpoint to base URL
+        self.backend_endpoint = f"{backend_base_url.rstrip('/')}/api/v1/projects" if backend_base_url else ""
     
     async def execute_workflow(self, collected_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -99,7 +102,12 @@ class WorkflowService:
             )
             
             # Step 5: Send to backend endpoint
+            print("🔄 Step 5: Sending to backend endpoint...")
             backend_status = await self._send_to_backend(trd, time_estimates, cost_estimates)
+            if backend_status.get("sent"):
+                print(f"✅ Successfully sent to backend (Status: {backend_status.get('status_code')})")
+            else:
+                print(f"⚠️  Backend send failed: {backend_status.get('message')}")
             
             return {
                 "success": True,
@@ -140,9 +148,12 @@ class WorkflowService:
         try:
             payload = {
                 "trd": trd,
-                "time_estimate": time_estimate,
-                "cost_estimate": cost_estimate
+                "estimated_time": time_estimate,
+                "estimated_cost": cost_estimate
             }
+            
+            print(f"   📤 Sending to: {self.backend_endpoint}")
+            print(f"   📦 Payload size: trd={len(trd)} chars, estimated_time={len(json.dumps(time_estimate))} bytes, estimated_cost={len(json.dumps(cost_estimate))} bytes")
             
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
