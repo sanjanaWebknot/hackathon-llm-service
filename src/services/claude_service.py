@@ -2,14 +2,116 @@
 Anthropic Claude service for PRD generation
 """
 import os
+import re
 from anthropic import Anthropic
 from dotenv import load_dotenv
 from src.utils.prompts import TIME_ESTIMATION_PROMPT
 from src.utils.prompts import COST_ESTIMATION_PROMPT
-from src.utils.prompts import PRD_GENERATION_PROMPT
+# from src.utils.prompts import PRD_GENERATION_PROMPT
 import json
 
 load_dotenv()
+
+
+def clean_and_parse_json(content: str) -> dict:
+    """
+    Clean and parse JSON content that may have formatting issues
+    
+    Args:
+        content: Raw JSON string that may be malformed
+        
+    Returns:
+        Parsed JSON dictionary
+        
+    Raises:
+        Exception: If JSON cannot be parsed after cleaning attempts
+    """
+    original_content = content
+    
+    # Remove markdown code blocks if present
+    if content.startswith("```json"):
+        content = content[7:]
+    elif content.startswith("```"):
+        content = content[3:]
+    
+    if content.endswith("```"):
+        content = content[:-3]
+    
+    content = content.strip()
+    
+    # Try to find JSON object in the content (in case there's extra text)
+    json_match = re.search(r'\{.*\}', content, re.DOTALL)
+    if json_match:
+        content = json_match.group(0)
+    
+    # Try direct parsing first
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+    
+    # Fix common issues
+    # 1. Remove trailing commas before closing braces/brackets
+    content = re.sub(r',(\s*[}\]])', r'\1', content)
+    
+    # 2. Try parsing again
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+    
+    # 3. Fix single quotes - replace single quotes with double quotes
+    # This handles the common case where LLMs use single quotes instead of double
+    # We'll be careful to only replace quotes that are clearly JSON syntax
+    # Pattern: single quotes around keys and string values
+    # Match: 'key': or : 'value' or 'key': 'value'
+    def fix_single_quotes(text):
+        # Replace 'key': with "key":
+        text = re.sub(r"'([^']+)':", r'"\1":', text)
+        # Replace : 'value' with : "value" (but not if already double-quoted)
+        text = re.sub(r":\s*'([^']*)'([,}\]]|\s*$)", r': "\1"\2', text)
+        # Replace standalone 'value' (for array values)
+        text = re.sub(r"'\s*([^']*)\s*'([,}\]]|\s*$)", r'"\1"\2', text)
+        return text
+    
+    # Try with single quote fix
+    try:
+        content_fixed = fix_single_quotes(content)
+        return json.loads(content_fixed)
+    except (json.JSONDecodeError, Exception):
+        pass
+    
+    # 4. Last resort: simple single quote replacement (may break apostrophes in strings)
+    # Only do this if the content clearly has single quotes as delimiters
+    if "'" in content and '"' not in content:
+        content_simple = content.replace("'", '"')
+        try:
+            return json.loads(content_simple)
+        except json.JSONDecodeError:
+            pass
+    
+    # 5. Extract just the JSON structure (first { to last })
+    first_brace = content.find('{')
+    last_brace = content.rfind('}')
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        try:
+            extracted = content[first_brace:last_brace + 1]
+            extracted = re.sub(r',(\s*[}\]])', r'\1', extracted)
+            return json.loads(extracted)
+        except json.JSONDecodeError:
+            pass
+    
+    # If all else fails, raise an error with the problematic content
+    error_preview = original_content[:1000] if len(original_content) > 1000 else original_content
+    # Also try to show where the error might be
+    try:
+        # Try one more time to get the exact error location
+        json.loads(content)
+    except json.JSONDecodeError as e:
+        error_msg = f"Failed to parse JSON: {str(e)}. Content around error (char {e.pos}): {content[max(0, e.pos-50):e.pos+50]}"
+        raise Exception(error_msg)
+    
+    raise Exception(f"Failed to parse JSON after cleaning attempts. Content preview: {error_preview}...")
 
 class ClaudeService:
     def __init__(self):
@@ -107,19 +209,8 @@ class ClaudeService:
             
             content = message.content[0].text.strip()
             
-            # Remove markdown code blocks if present
-            if content.startswith("```json"):
-                content = content[7:]
-            elif content.startswith("```"):
-                content = content[3:]
-            
-            if content.endswith("```"):
-                content = content[:-3]
-            
-            content = content.strip()
-            
-            # Parse JSON
-            return json.loads(content)
+            # Use robust JSON parser
+            return clean_and_parse_json(content)
         except json.JSONDecodeError as e:
             raise Exception(f"Failed to parse time estimates JSON: {str(e)}")
         except Exception as e:
@@ -162,19 +253,8 @@ class ClaudeService:
             
             content = message.content[0].text.strip()
             
-            # Remove markdown code blocks if present
-            if content.startswith("```json"):
-                content = content[7:]
-            elif content.startswith("```"):
-                content = content[3:]
-            
-            if content.endswith("```"):
-                content = content[:-3]
-            
-            content = content.strip()
-            
-            # Parse JSON
-            return json.loads(content)
+            # Use robust JSON parser
+            return clean_and_parse_json(content)
         except json.JSONDecodeError as e:
             raise Exception(f"Failed to parse cost estimates JSON: {str(e)}")
         except Exception as e:
