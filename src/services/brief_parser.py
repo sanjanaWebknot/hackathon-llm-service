@@ -75,8 +75,15 @@ class BriefParser:
                     data[field_name] = None
         
         # Also try alternative parsing: look for "**Answer:**" patterns
-        if not data or len(data) < 3:
-            data = self._parse_alternative_format(content)
+        # Check if we have valid data (not just None values)
+        valid_data_count = sum(1 for v in data.values() if v is not None and v != "")
+        if valid_data_count < 3:
+            # Try alternative format
+            alt_data = self._parse_alternative_format(content)
+            # Merge alternative data, preferring non-None values
+            for key, value in alt_data.items():
+                if value and value != "":
+                    data[key] = value
         
         return data
     
